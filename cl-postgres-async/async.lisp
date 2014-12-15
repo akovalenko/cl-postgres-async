@@ -127,56 +127,85 @@ from the socket."
   (bb:with-promise (resolve reject)
     (setf (slot-value conn 'callback) #'resolve)))
 
+(defun async-do-while (promise-fn test-fn)
+  (bb:with-promise (resolve reject)
+    (labels ((iter ()
+	       (bb:aif (bb:attach (funcall promise-fn) test-fn)
+		       (resolve)
+		       (iter))))
+      (iter))))
+
 (defun async-initiate-connection (conn)
   (let ((buffer (slot-value conn 'buffer)))
-    (bb:alet*
-	((socket
-	  (bb:with-promise (resolve reject)
-	    (as:tcp-connect
-	     (connection-host conn)
-	     (connection-port conn)
-	     (lambda (sock chunk)
-	       (declare (ignorable sock))
-	       (pprint chunk)
-	       (push-chunk buffer chunk)
-	       (map-messages buffer
-			     (lambda (stream)
-			       (async-handle-message conn stream))))
-	     (lambda (ev)
-	       (reject ev))
-	     :connect-cb
-	     (lambda (socket)
-	       (setf (connection-socket conn)
-		     (make-instance 'as:async-output-stream :socket socket))
-	       (resolve socket)))))
-	 (r
-	  (progn
+    (setf (message-buffer-fill buffer) 0)
+    (bb:with-promise (resolve reject)
+      (bb:alet*
+	  ((socket
+	    (bb:with-promise (resolve reject)
+	      (as:tcp-connect
+	       (connection-host conn)
+	       (connection-port conn)
+	       (lambda (sock chunk)
+		 (declare (ignorable sock))
+		 (pprint chunk)
+		 (push-chunk buffer chunk)
+		 (map-messages buffer
+			       (lambda (stream)
+				 (async-handle-message conn stream))))
+	       (lambda (ev)
+		 (reject ev))
+	       :connect-cb
+	       (lambda (socket)
+		 (setf (connection-socket conn)
+		       (make-instance 'as:async-output-stream :socket socket))
+		 (resolve socket)))))
+	   (r
 	    (startup-message (connection-socket conn)
 			     (connection-user conn)
-			     (connection-db conn))
-	    (async-next-message conn)))
-	 (nil
-	  (single-message-case r
-	    (#\R
-	     (let ((socket (connection-socket conn))
-		   (password (connection-password conn))
-		   (type (read-uint4 r)))
-	       (ecase type
-		 (0)
-		 (3 (unless password
-		      (error "Server requested plain-password authentication, but no password was given."))
-		  (plain-password-message socket password)
-		  (force-output socket)
-		  (resolve))
-		 (5 (unless password
-		      (error "Server requested plain-password authentication, but no password was given."))
-		  (pprint `(type ,type end ,(flexi-streams::vector-stream-end r)
-				 position ,(flexi-streams::file-position r)))
+			     (connection-db conn)))
+	   (nil
+	    (progn
+	      (pprint "After startup message")
+	      (async-do-while
+	       (lambda () (async-next-message conn))
+	       (lambda (r)
+		 (format t "~&Got stream ~A~&" r)
+		 (let ((done nil))
+		   (single-message-case r
+		     (#\R
+		      (let ((socket (connection-socket conn))
+			    (password (connection-password conn))
+			    (type (read-uint4 r)))
+			(format t "~&Passwd ~A, req type ~A~&" password type)
+			(ecase type
+			  (0 (setf done t))
+			  (3 (unless password
+			       (error "Server requested plain-password authentication, but no password was given."))
+			   (plain-password-message socket password)
+			   (force-output socket)
+			   (setf done t))
+			  (5 (unless password
+			       (error "Server requested md5-password authentication, but no password was given."))
+			   (pprint `(type ,type end ,(flexi-streams::vector-stream-end r)
+					  position ,(flexi-streams::file-position r)))
 
-		  (md5-password-message socket password
-					(connection-user conn)
-					(read-bytes r 4))
-		  (force-output socket)
-		  (pprint "Done auth")))))))))))
-
+			   (md5-password-message socket password
+						 (connection-user conn)
+						 (read-bytes r 4))
+			   (force-output socket))))))
+		   (format t "Done: ~A~&" done)
+		   done)))))
+	   (nil
+	    (progn
+	      (pprint "After auth")
+	      (async-do-while
+	       (lambda () (async-next-message conn))
+	       (lambda (r)
+		 (let (done)
+		   (single-message-case r
+		     (#\K)
+		     (#\Z
+		      (setf done t)))
+		   done))))))
+	(resolve conn)))))
 
