@@ -135,6 +135,23 @@ from the socket."
 		       (iter))))
       (iter))))
 
+(defmacro ado-messages ((conn input
+			 &key
+			    (output (gensym "output"))
+			    (finish 'finish))
+			&body body)
+  (let ((done-name (gensym "done")))
+    `(macrolet ((,finish ()
+		  `(setf ,',done-name t)))
+       (let ((,output (connection-socket conn)))
+	 (async-do-while
+	  (lambda () (async-next-message ,conn))
+	  (lambda (,input)
+	    (let ((,done-name nil))
+	      (single-message-case ,input
+		,@body)
+	      ,done-name)))))))
+
 (defun async-initiate-connection (conn)
   (let ((buffer (slot-value conn 'buffer)))
     (setf (message-buffer-fill buffer) 0)
