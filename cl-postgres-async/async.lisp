@@ -183,46 +183,40 @@ from the socket."
 	   (nil
 	    (progn
 	      (pprint "After startup message")
-	      (async-do-while
-	       (lambda () (async-next-message conn))
-	       (lambda (r)
-		 (format t "~&Got stream ~A~&" r)
-		 (let ((done nil))
-		   (single-message-case r
-		     (#\R
-		      (let ((socket (connection-socket conn))
-			    (password (connection-password conn))
-			    (type (read-uint4 r)))
-			(format t "~&Passwd ~A, req type ~A~&" password type)
-			(ecase type
-			  (0 (setf done t))
-			  (3 (unless password
-			       (error "Server requested plain-password authentication, but no password was given."))
-			   (plain-password-message socket password)
-			   (force-output socket)
-			   (setf done t))
-			  (5 (unless password
-			       (error "Server requested md5-password authentication, but no password was given."))
-			   (pprint `(type ,type end ,(flexi-streams::vector-stream-end r)
-					  position ,(flexi-streams::file-position r)))
+	      (let ((password (connection-password conn)))
+		(ado-messages (conn r :output w)
+		  (#\R
+		   (let ((type (read-uint4 r)))
+		     (format t "~&Passwd ~A, req type ~A~&" password type)
+		     (ecase type
+		       (0 (pprint "authed") (finish))
+		       (3 (unless password
+			    (error "Server requested plain-password authentication, but no password was given."))
+			(plain-password-message w password)
+			(force-output w)
+			(finish))
+		       (5 (unless password
+			    (error "Server requested md5-password authentication, but no password was given."))
+			(pprint `(type ,type end ,(flexi-streams::vector-stream-end r)
+				       position ,(flexi-streams::file-position r)))
 
-			   (md5-password-message socket password
-						 (connection-user conn)
-						 (read-bytes r 4))
-			   (force-output socket))))))
-		   (format t "Done: ~A~&" done)
-		   done)))))
+			(md5-password-message w password
+					      (connection-user conn)
+					      (read-bytes r 4))
+			(force-output w)))))))))
 	   (nil
 	    (progn
 	      (pprint "After auth")
-	      (async-do-while
-	       (lambda () (async-next-message conn))
-	       (lambda (r)
-		 (let (done)
-		   (single-message-case r
-		     (#\K)
-		     (#\Z
-		      (setf done t)))
-		   done))))))
+	      (ado-messages (conn r)
+		(#\K)
+		(#\Z (finish))))))
 	(resolve conn)))))
+
+(defun async-send-parse (conn name query)
+  (let ((socket (connection-socket conn)))
+    (parse-message socket name query)
+    (force-output socket)
+    (ado-messages (conn r)
+      (#\1 (finish)))))
+
 
