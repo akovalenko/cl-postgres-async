@@ -49,7 +49,6 @@ one, passing an input stream wherefrom the message can be read"
 	      (incf (fast-io::input-buffer-pos buf)
 		    (- length 4))
 	      (when (< tail (+ 1 length)) (short))
-	      (pprint (subseq data head  (+ head 1 length)))
 	      (funcall function
 		       (flexi-streams:make-in-memory-input-stream
 			data
@@ -117,8 +116,6 @@ from the socket."
 
 (defun async-handle-message (conn stream)
   (with-slots (callback) conn
-    (format t "~&AHM: ~A~&" callback)
-    (force-output)
     (funcall (or (shiftf callback nil)
 		 (lambda (stream)
 		   (single-message-case stream))) stream)))
@@ -144,6 +141,7 @@ from the socket."
     `(macrolet ((,finish ()
 		  `(setf ,',done-name t)))
        (let ((,output (connection-socket conn)))
+	 (declare (ignorable ,output))
 	 (async-do-while
 	  (lambda () (async-next-message ,conn))
 	  (lambda (,input)
@@ -157,14 +155,13 @@ from the socket."
     (setf (message-buffer-fill buffer) 0)
     (bb:with-promise (resolve reject)
       (bb:alet*
-	  ((socket
+	  ((nil
 	    (bb:with-promise (resolve reject)
 	      (as:tcp-connect
 	       (connection-host conn)
 	       (connection-port conn)
 	       (lambda (sock chunk)
 		 (declare (ignorable sock))
-		 (pprint chunk)
 		 (push-chunk buffer chunk)
 		 (map-messages buffer
 			       (lambda (stream)
@@ -176,20 +173,18 @@ from the socket."
 		 (setf (connection-socket conn)
 		       (make-instance 'as:async-output-stream :socket socket))
 		 (resolve socket)))))
-	   (r
+	   (nil
 	    (startup-message (connection-socket conn)
 			     (connection-user conn)
 			     (connection-db conn)))
 	   (nil
 	    (progn
-	      (pprint "After startup message")
 	      (let ((password (connection-password conn)))
 		(ado-messages (conn r :output w)
 		  (#\R
 		   (let ((type (read-uint4 r)))
-		     (format t "~&Passwd ~A, req type ~A~&" password type)
 		     (ecase type
-		       (0 (pprint "authed") (finish))
+		       (0 (finish))
 		       (3 (unless password
 			    (error "Server requested plain-password authentication, but no password was given."))
 			(plain-password-message w password)
@@ -197,16 +192,12 @@ from the socket."
 			(finish))
 		       (5 (unless password
 			    (error "Server requested md5-password authentication, but no password was given."))
-			(pprint `(type ,type end ,(flexi-streams::vector-stream-end r)
-				       position ,(flexi-streams::file-position r)))
-
 			(md5-password-message w password
 					      (connection-user conn)
 					      (read-bytes r 4))
 			(force-output w)))))))))
 	   (nil
 	    (progn
-	      (pprint "After auth")
 	      (ado-messages (conn r)
 		(#\K)
 		(#\Z (finish))))))
