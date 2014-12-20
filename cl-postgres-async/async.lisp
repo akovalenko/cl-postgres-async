@@ -118,7 +118,8 @@ from the socket."
   (with-slots (callback) conn
     (funcall (or (shiftf callback nil)
 		 (lambda (stream)
-		   (single-message-case stream))) stream)))
+		   (let ((*connection-params* (connection-parameters conn)))
+		     (single-message-case stream)))) stream)))
 
 (defun async-next-message (conn)
   (bb:with-promise (resolve reject)
@@ -134,8 +135,8 @@ from the socket."
 
 (defmacro ado-messages ((conn input
 			 &key
-			    (output (gensym "output"))
-			    (finish 'finish))
+			   (output (gensym "output"))
+			   (finish 'finish))
 			&body body)
   (let ((done-name (gensym "done")))
     `(macrolet ((,finish ()
@@ -145,7 +146,8 @@ from the socket."
 	 (async-do-while
 	  (lambda () (async-next-message ,conn))
 	  (lambda (,input)
-	    (let ((,done-name nil))
+	    (let ((,done-name nil)
+		  (*connection-params* (connection-parameters ,conn)))
 	      (single-message-case ,input
 		,@body)
 	      ,done-name)))))))
