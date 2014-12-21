@@ -178,33 +178,30 @@ from the socket."
 		       (make-instance 'as:async-output-stream :socket socket))
 		 (resolve socket)))))
 	   (nil
-	    (startup-message (connection-socket conn)
-			     (connection-user conn)
-			     (connection-db conn)))
+	    (let ((password (connection-password conn)))
+	      (startup-message (connection-socket conn)
+			       (connection-user conn)
+			       (connection-db conn))
+	      (ado-messages (conn r :output w)
+		(#\R
+		 (let ((type (read-uint4 r)))
+		   (ecase type
+		     (0 (finish))
+		     (3 (unless password
+			  (error "Server requested plain-password authentication, but no password was given."))
+		      (plain-password-message w password)
+		      (force-output w)
+		      (finish))
+		     (5 (unless password
+			  (error "Server requested md5-password authentication, but no password was given."))
+		      (md5-password-message w password
+					    (connection-user conn)
+					    (read-bytes r 4))
+		      (force-output w))))))))
 	   (nil
-	    (progn
-	      (let ((password (connection-password conn)))
-		(ado-messages (conn r :output w)
-		  (#\R
-		   (let ((type (read-uint4 r)))
-		     (ecase type
-		       (0 (finish))
-		       (3 (unless password
-			    (error "Server requested plain-password authentication, but no password was given."))
-			(plain-password-message w password)
-			(force-output w)
-			(finish))
-		       (5 (unless password
-			    (error "Server requested md5-password authentication, but no password was given."))
-			(md5-password-message w password
-					      (connection-user conn)
-					      (read-bytes r 4))
-			(force-output w)))))))))
-	   (nil
-	    (progn
-	      (ado-messages (conn r)
-		(#\K)
-		(#\Z (finish))))))
+	    (ado-messages (conn r)
+	      (#\K)
+	      (#\Z (finish)))))
 	(resolve conn)))))
 
 (defun async-send-parse (conn name query)
