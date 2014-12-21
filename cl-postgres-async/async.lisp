@@ -190,14 +190,12 @@ from the socket."
 		     (3 (unless password
 			  (error "Server requested plain-password authentication, but no password was given."))
 		      (plain-password-message w password)
-		      (force-output w)
 		      (finish))
 		     (5 (unless password
 			  (error "Server requested md5-password authentication, but no password was given."))
 		      (md5-password-message w password
 					    (connection-user conn)
-					    (read-bytes r 4))
-		      (force-output w))))))))
+					    (read-bytes r 4)))))))))
 	   (nil
 	    (ado-messages (conn r)
 	      (#\K)
@@ -212,7 +210,6 @@ from the socket."
   (let ((socket (connection-socket conn)))
     (parse-message socket name query)
     (flush-message socket)
-    (force-output socket)
     (ado-messages (conn r)
       (#\1 (finish)))))
 
@@ -231,7 +228,6 @@ to the result."
 	  (progn
 	    (describe-prepared-message socket name)
 	    (flush-message socket)
-	    (force-output socket)
 	    (ado-messages (conn r)
 	      ;; ParameterDescription
 	      (#\t (setf n-parameters (read-uint2 r))
@@ -250,7 +246,6 @@ to the result."
 			  parameters)
 	    (simple-execute-message socket)
 	    (sync-message socket)
-	    (force-output socket)
 	    (ado-messages (conn r)
 	      ;; BindComplete
 	      (#\2 (finish))))))
