@@ -252,7 +252,8 @@ to the result."
 	      (#\2 (finish))))))
       (ado-messages (conn r)
 	(#\C)
-	(#\D (funcall row-handler row-description r))
+	(#\D (let ((*timestamp-format* (connection-timestamp-format conn)))
+	       (funcall row-handler row-description r)))
 	(#\Z (finish))))))
 
 (defun read-field (stream field)
