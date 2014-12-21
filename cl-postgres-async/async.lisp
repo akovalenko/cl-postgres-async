@@ -123,7 +123,7 @@ from the socket."
 
 (defun async-next-message (conn)
   (bb:with-promise (resolve reject)
-    (setf (slot-value conn 'callback) #'resolve)))
+    (setf (slot-value conn 'callback) (lambda (stream) (resolve stream)))))
 
 (defun async-do-while (promise-fn test-fn)
   (bb:with-promise (resolve reject)
