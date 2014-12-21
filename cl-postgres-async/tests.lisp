@@ -1,5 +1,5 @@
 (defpackage :cl-postgres-async-tests
-  (:use :common-lisp :Eos :simple-date :cl-postgres :cl-postgres-async-error)
+  (:use :common-lisp :Eos :simple-date :cl-postgres-async :cl-postgres-async-error)
   (:export #:prompt-connection))
 
 (in-package :cl-postgres-async-tests)
