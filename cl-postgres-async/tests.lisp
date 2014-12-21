@@ -2,7 +2,7 @@
   (:use :common-lisp :Eos :simple-date :cl-postgres :cl-postgres-async-error)
   (:export #:prompt-connection))
 
-(in-package :cl-postgres-tests)
+(in-package :cl-postgres-async-tests)
 
 (defparameter *test-connection* '("test" "test" "" "localhost"))
 
