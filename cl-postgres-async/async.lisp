@@ -154,6 +154,8 @@ from the socket."
 
 (defun async-initiate-connection (conn)
   (let ((buffer (slot-value conn 'buffer)))
+    (setf (connection-parameters conn)
+	  (make-hash-table :test 'equal))
     (setf (message-buffer-fill buffer) 0)
     (bb:with-promise (resolve reject)
       (bb:alet*
@@ -208,8 +210,73 @@ from the socket."
 (defun async-send-parse (conn name query)
   (let ((socket (connection-socket conn)))
     (parse-message socket name query)
+    (flush-message socket)
     (force-output socket)
     (ado-messages (conn r)
       (#\1 (finish)))))
 
+(defun async-send-execute (conn name parameters row-handler)
+  "Execute a previously parsed query, and apply the given row-reader
+to the result."
+  (declare (type string name)
+           (type list parameters)
+           #.*optimize*)
+  (let ((socket (connection-socket conn))
+	(row-description nil)
+	(n-parameters 0))
+    (declare (type (unsigned-byte 16) n-parameters))
+    (bb:alet*
+	((nil
+	  (progn
+	    (describe-prepared-message socket name)
+	    (flush-message socket)
+	    (force-output socket)
+	    (ado-messages (conn r)
+	      ;; ParameterDescription
+	      (#\t (setf n-parameters (read-uint2 r))
+		   (finish)))))
+	 (nil
+	  (ado-messages (conn r)
+	    (#\T (setf row-description (read-field-descriptions r))
+		 (finish))
+	    (#\n (finish))))
+	 (nil
+	  (progn
+	    (unless (= (length parameters) n-parameters)
+	      (error 'database-error
+		     :message (format nil "Incorrect number of parameters given for prepared statement ~A." name)))
+	    (bind-message socket name (map 'vector 'field-binary-p row-description)
+			  parameters)
+	    (simple-execute-message socket)
+	    (sync-message socket)
+	    (force-output socket)
+	    (ado-messages (conn r)
+	      ;; BindComplete
+	      (#\2 (finish))))))
+      (ado-messages (conn r)
+	(#\C)
+	(#\D (funcall row-handler row-description r))
+	(#\Z (finish))))))
+
+(defun read-field (stream field)
+  (declare (type field-description field))
+  (let ((size (read-int4 stream)))
+    (declare (type (signed-byte 32) size))
+    (if (= size -1)
+	:null
+	(funcall (field-interpreter field)
+		 stream size))))
+
+;;; FIXME code reuse gone wild, down with clarity
+(defun row-handler-by-reader (callback reader)
+  (lambda (fields stream)
+    (let ((stream
+	    (make-concatenated-stream
+	     (flexi-streams:make-in-memory-input-stream
+	      #(68 0 0 0 4))
+	     stream
+	     (flexi-streams:make-in-memory-input-stream
+	      #(67 0 0 0 4 0 0)))))
+      (funcall callback
+	       (funcall reader stream fields)))))
 
