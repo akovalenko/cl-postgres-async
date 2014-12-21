@@ -202,6 +202,10 @@ from the socket."
 	    (ado-messages (conn r)
 	      (#\K)
 	      (#\Z (finish)))))
+	(setf (connection-timestamp-format conn)
+	      (if (string= (gethash "integer_datetimes"
+				    (connection-parameters conn)) "on")
+		  :integer :float))
 	(resolve conn)))))
 
 (defun async-send-parse (conn name query)
