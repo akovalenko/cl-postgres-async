@@ -57,8 +57,8 @@ one, passing an input stream wherefrom the message can be read"
 
 (defclass async-database-connection (database-connection)
   ((buffer :initform (make-message-buffer))
-   (callback :initform nil)))
-
+   (callback :initform nil)
+   (errback :initform nil)))
 
 (defmacro single-message-case (socket &body clauses)
   "Non-recursive variant of helper macro for reading messages from the
@@ -113,24 +113,29 @@ from the socket."
 							 (code-char ,char-name))))))))))
 	   (,iter-name))))))
 
-
 (defun async-handle-message (conn stream)
-  (with-slots (callback) conn
-    (funcall (or (shiftf callback nil)
+  (with-slots (callback errback) conn
+    (funcall (or (prog1 (shiftf callback nil)
+		   (shiftf errback nil))
 		 (lambda (stream)
 		   (let ((*connection-params* (connection-parameters conn)))
 		     (single-message-case stream)))) stream)))
 
 (defun async-next-message (conn)
   (bb:with-promise (resolve reject)
-    (setf (slot-value conn 'callback) (lambda (stream) (resolve stream)))))
+    (setf (slot-value conn 'callback)
+	  (lambda (stream) (resolve stream))
+	  (slot-value conn 'errback)
+	  (lambda (e) (reject e)))))
 
 (defun async-do-while (promise-fn test-fn)
   (bb:with-promise (resolve reject)
     (labels ((iter ()
-	       (bb:aif (bb:attach (funcall promise-fn) test-fn)
-		       (resolve)
-		       (iter))))
+	       (bb:catcher
+		(bb:aif (bb:attach (funcall promise-fn) test-fn)
+			(resolve)
+			(iter))
+		(t (e) (reject e)))))
       (iter))))
 
 (defmacro ado-messages ((conn input
