@@ -221,8 +221,12 @@ to the result."
            #.*optimize*)
   (let ((socket (connection-socket conn))
 	(row-description nil)
-	(n-parameters 0))
-    (declare (type (unsigned-byte 16) n-parameters))
+	(n-parameters 0)
+	(row-handler (etypecase row-handler
+		       (function row-handler)
+		       (symbol (symbol-function row-handler)))))
+    (declare (type (unsigned-byte 16) n-parameters)
+	     (type function row-handler))
     (bb:alet*
 	((nil
 	  (progn
