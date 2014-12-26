@@ -222,12 +222,63 @@ from the socket."
 		:integer :float))
       conn)))
 
+(defun try-to-sync-async (conn sync-sent)
+  (unless sync-sent
+    (sync-message (connection-socket conn)))
+  (ado-messages (conn r)
+    (#\Z (finish))
+    (t :skip)))
+
+(defmacro with-async-syncing ((conn) &body body)
+  (let ((ok (gensym "ok-"))
+	(sync-sent (gensym "sync-sent-")))
+    `(let ((,sync-sent nil)
+	   (,ok nil))
+       (bb:finally
+	   (bb:tap
+	    (flet ((sync-message (socket)
+		     (setf ,sync-sent t)
+		     (sync-message socket)))
+	      (declare (ignorable #'sync-message))
+	      ,@body)
+	    (lambda (&rest values)
+	      (declare (ignore values))
+	      (setf ,ok t)))
+	 (unless ,ok
+	   (try-to-sync-async ,conn ,sync-sent))))))
+
+(defmacro with-async-query ((query) &body body)
+  (let ((time-name (gensym))
+	(query-name (gensym)))
+    `(let ((,query-name ,query)
+           (,time-name (if *query-callback* (get-internal-real-time) 0)))
+       (bb:tap
+	(progn ,@body)
+	(lambda (&rest values)
+	  (declare (ignore values))
+	  (when *query-callback*
+	    (funcall *query-callback*
+		     ,query-name
+		     (- (get-internal-real-time) ,time-name))))))))
+
+(defmacro using-async-connection ((connection) &body body)
+  (let ((connection-name (gensym)))
+    `(let* ((,connection-name ,connection))
+       (when (not (connection-available ,connection-name))
+	 (error 'database-error
+		:message "This connection is still processing another query."))
+       (setf (connection-available ,connection-name) nil)
+       (bb:finally (progn ,@body)
+	 (setf (connection-available ,connection-name) t)))))
+
 (defun async-send-parse (conn name query)
-  (let ((socket (connection-socket conn)))
-    (parse-message socket name query)
-    (flush-message socket)
-    (ado-messages (conn r)
-      (#\1 (finish)))))
+  (with-async-syncing (conn)
+    (with-async-query (query)
+     (let ((socket (connection-socket conn)))
+       (parse-message socket name query)
+       (flush-message socket)
+       (ado-messages (conn r)
+	 (#\1 (finish)))))))
 
 (defun async-send-execute (conn name parameters row-handler)
   "Execute a previously parsed query, and apply the given row-reader
@@ -244,44 +295,89 @@ to the result."
 	(affected-rows nil))
     (declare (type (unsigned-byte 16) n-parameters)
 	     (type function row-handler))
-    (bb:alet*
-	((nil
-	  (progn
-	    (describe-prepared-message socket name)
-	    (flush-message socket)
+    (with-async-syncing (conn)
+      (bb:alet*
+	  ((nil
+	    (progn
+	      (describe-prepared-message socket name)
+	      (flush-message socket)
+	      (ado-messages (conn r)
+		;; ParameterDescription
+		(#\t (setf n-parameters (read-uint2 r))
+		     (finish)))))
+	   (nil
 	    (ado-messages (conn r)
-	      ;; ParameterDescription
-	      (#\t (setf n-parameters (read-uint2 r))
-		   (finish)))))
-	 (nil
-	  (ado-messages (conn r)
-	    (#\T (setf row-description (read-field-descriptions r))
-		 (finish))
-	    (#\n (finish))))
-	 (nil
-	  (progn
-	    (unless (= (length parameters) n-parameters)
-	      (error 'database-error
-		     :message (format nil "Incorrect number of parameters given for prepared statement ~A." name)))
-	    (bind-message socket name (map 'vector 'field-binary-p row-description)
-			  parameters)
-	    (simple-execute-message socket)
-	    (sync-message socket)
+	      (#\T (setf row-description (read-field-descriptions r))
+		   (finish))
+	      (#\n (finish))))
+	   (nil
+	    (progn
+	      (unless (= (length parameters) n-parameters)
+		(error 'database-error
+		       :message (format nil "Incorrect number of parameters given for prepared statement ~A." name)))
+	      (bind-message socket name (map 'vector 'field-binary-p row-description)
+			    parameters)
+	      (simple-execute-message socket)
+	      (sync-message socket)
+	      (ado-messages (conn r)
+		;; BindComplete
+		(#\2 (finish)))))
+	   (nil
 	    (ado-messages (conn r)
-	      ;; BindComplete
-	      (#\2 (finish)))))
-	 (nil
-	  (ado-messages (conn r)
-	    (#\C (let* ((command-tag (read-str r))
-			(space (position #\Space command-tag :from-end t)))
-		   (when space
-		     (setf affected-rows
-			   (parse-integer command-tag :junk-allowed t
-						      :start (1+ space))))))
-	    (#\D (let ((*timestamp-format* (connection-timestamp-format conn)))
-		   (funcall row-handler row-description r)))
-	    (#\Z (finish)))))
-      affected-rows)))
+	      (#\C (let* ((command-tag (read-str r))
+			  (space (position #\Space command-tag :from-end t)))
+		     (when space
+		       (setf affected-rows
+			     (parse-integer command-tag :junk-allowed t
+							:start (1+ space))))))
+	      (#\D (let ((*timestamp-format* (connection-timestamp-format conn)))
+		     (funcall row-handler row-description r)))
+	      (#\Z (finish)))))
+	affected-rows))))
+
+(defun async-send-query (conn query row-handler)
+  (declare (type string query) #.*optimize*)
+  (let ((socket (connection-socket conn))
+	(row-description nil)
+	(affected-rows nil)
+	(row-handler (etypecase row-handler
+		       (function row-handler)
+		       (symbol (symbol-function row-handler)))))
+    (with-async-syncing (conn)
+      (with-async-query (query)
+	(bb:alet*
+	    ((nil
+	      (progn
+		(simple-parse-message socket query)
+		(simple-describe-message socket)
+		(flush-message socket)
+		(ado-messages (conn r)
+		  (#\1 (finish)))))
+	     (nil
+	      (ado-messages (conn r)
+		(#\t :skip)
+		(#\T (setf row-description (read-field-descriptions r))
+		     (finish))
+		(#\n (finish))))
+	     (nil
+	      (progn
+		(simple-bind-message socket (map 'vector 'field-binary-p row-description))
+		(simple-execute-message socket)
+		(sync-message socket)
+		(ado-messages (conn r)
+		  (#\2 (finish)))))
+	     (nil
+	      (ado-messages (conn r)
+		(#\C (let* ((command-tag (read-str r))
+			    (space (position #\Space command-tag :from-end t)))
+		       (when space
+			 (setf affected-rows
+			       (parse-integer command-tag :junk-allowed t
+							  :start (1+ space))))))
+		(#\D (let ((*timestamp-format* (connection-timestamp-format conn)))
+		       (funcall row-handler row-description r)))
+		(#\Z (finish)))))
+	  affected-rows)))))
 
 (defun read-field (stream field)
   (declare (type field-description field))
@@ -305,6 +401,7 @@ to the result."
       (funcall callback
 	       (funcall reader stream fields)))))
 
+
 (defun async-open-database (database user password host
 			    &optional (port 5432) (use-ssl :no) (service "postgres"))
   (check-type database string)
@@ -318,3 +415,25 @@ to the result."
 		  :host host :port port :user user
 		  :password password :socket nil :db database :ssl use-ssl
 		  :service service)))
+
+(defun ignore-row-handler (fields stream)
+  (declare (ignore fields stream)))
+
+(defun async-exec-query (connection query
+			 &optional (row-handler #'ignore-row-handler))
+  (check-type query string)
+  (using-async-connection (connection)
+    (async-send-query connection query row-handler)))
+
+(defun async-prepare-queery (connection name query)
+  (check-type query string)
+  (using-async-connection (connection)
+    (async-send-parse connection name query)))
+
+(defun async-exec-prepared (connection name parameters
+			    &optional (row-handler #'ignore-row-handler))
+  (check-type name string)
+  (check-type parameters list)
+  (using-async-connection (connection)
+    (async-send-execute connection name parameters row-handler)))
+
