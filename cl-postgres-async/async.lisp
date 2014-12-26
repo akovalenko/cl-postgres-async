@@ -132,10 +132,11 @@ from the socket."
   (bb:with-promise (resolve reject)
     (labels ((iter ()
 	       (bb:catcher
-		(bb:aif (bb:attach (funcall promise-fn) test-fn)
-			(resolve)
-			(iter))
-		(t (e) (reject e)))))
+		(bb:alet* ((value (funcall promise-fn)))
+		  (bb:aif (funcall test-fn value)
+			  (resolve)
+			  (iter)))
+		(condition (c) (reject c)))))
       (iter))))
 
 (defmacro ado-messages ((conn input
@@ -173,58 +174,55 @@ from the socket."
     (setf (connection-parameters conn)
 	  (make-hash-table :test 'equal))
     (setf (message-buffer-fill buffer) 0)
-    (bb:with-promise (resolve reject)
-      (bb:catcher
-       (bb:alet*
-	   ((nil
-	     (bb:with-promise (resolve reject)
-	       (async-socket-connect
-		conn
-		(lambda (sock chunk)
-		  (declare (ignorable sock))
-		  (push-chunk buffer chunk)
-		  (map-messages buffer
-				(lambda (stream)
-				  (async-handle-message conn stream))))
-		(lambda (ev)
-		  (with-slots (errback) conn
-		    (if errback
-			(funcall errback ev)
-			(reject ev))))
-		:connect-cb
-		(lambda (socket)
-		  (setf (connection-socket conn)
-			(make-instance 'as:async-output-stream :socket socket))
-		  (resolve socket)))))
-	    (nil
-	     (let ((password (connection-password conn)))
-	       (startup-message (connection-socket conn)
-				(connection-user conn)
-				(connection-db conn))
-	       (ado-messages (conn r :output w)
-		 (#\R
-		  (let ((type (read-uint4 r)))
-		    (ecase type
-		      (0 (finish))
-		      (3 (unless password
-			   (error "Server requested plain-password authentication, but no password was given."))
-		       (plain-password-message w password)
-		       (finish))
-		      (5 (unless password
-			   (error "Server requested md5-password authentication, but no password was given."))
-		       (md5-password-message w password
-					     (connection-user conn)
-					     (read-bytes r 4)))))))))
-	    (nil
-	     (ado-messages (conn r)
-	       (#\K)
-	       (#\Z (finish)))))
-	 (setf (connection-timestamp-format conn)
-	       (if (string= (gethash "integer_datetimes"
-				     (connection-parameters conn)) "on")
-		   :integer :float))
-	 (resolve conn))
-       (t (e) (reject e))))))
+    (bb:alet*
+	((nil
+	  (bb:with-promise (resolve reject)
+	    (async-socket-connect
+	     conn
+	     (lambda (sock chunk)
+	       (declare (ignorable sock))
+	       (push-chunk buffer chunk)
+	       (map-messages buffer
+			     (lambda (stream)
+			       (async-handle-message conn stream))))
+	     (lambda (ev)
+	       (with-slots (errback) conn
+		 (if errback
+		     (funcall errback ev)
+		     (reject ev))))
+	     :connect-cb
+	     (lambda (socket)
+	       (setf (connection-socket conn)
+		     (make-instance 'as:async-output-stream :socket socket))
+	       (resolve socket)))))
+	 (nil
+	  (let ((password (connection-password conn)))
+	    (startup-message (connection-socket conn)
+			     (connection-user conn)
+			     (connection-db conn))
+	    (ado-messages (conn r :output w)
+	      (#\R
+	       (let ((type (read-uint4 r)))
+		 (ecase type
+		   (0 (finish))
+		   (3 (unless password
+			(error "Server requested plain-password authentication, but no password was given."))
+		    (plain-password-message w password)
+		    (finish))
+		   (5 (unless password
+			(error "Server requested md5-password authentication, but no password was given."))
+		    (md5-password-message w password
+					  (connection-user conn)
+					  (read-bytes r 4)))))))))
+	 (nil
+	  (ado-messages (conn r)
+	    (#\K)
+	    (#\Z (finish)))))
+      (setf (connection-timestamp-format conn)
+	    (if (string= (gethash "integer_datetimes"
+				  (connection-parameters conn)) "on")
+		:integer :float))
+      conn)))
 
 (defun async-send-parse (conn name query)
   (let ((socket (connection-socket conn)))
