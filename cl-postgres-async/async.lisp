@@ -146,7 +146,7 @@ from the socket."
   (let ((done-name (gensym "done")))
     `(macrolet ((,finish ()
 		  `(setf ,',done-name t)))
-       (let ((,output (connection-socket conn)))
+       (let ((,output (connection-socket ,conn)))
 	 (declare (ignorable ,output))
 	 (async-do-while
 	  (lambda () (async-next-message ,conn))
