@@ -242,7 +242,8 @@ to the result."
 	(n-parameters 0)
 	(row-handler (etypecase row-handler
 		       (function row-handler)
-		       (symbol (symbol-function row-handler)))))
+		       (symbol (symbol-function row-handler))))
+	(affected-rows nil))
     (declare (type (unsigned-byte 16) n-parameters)
 	     (type function row-handler))
     (bb:alet*
@@ -270,12 +271,19 @@ to the result."
 	    (sync-message socket)
 	    (ado-messages (conn r)
 	      ;; BindComplete
-	      (#\2 (finish))))))
-      (ado-messages (conn r)
-	(#\C)
-	(#\D (let ((*timestamp-format* (connection-timestamp-format conn)))
-	       (funcall row-handler row-description r)))
-	(#\Z (finish))))))
+	      (#\2 (finish)))))
+	 (nil
+	  (ado-messages (conn r)
+	    (#\C (let* ((command-tag (read-str r))
+			(space (position #\Space command-tag :from-end t)))
+		   (when space
+		     (setf affected-rows
+			   (parse-integer command-tag :junk-allowed t
+						      :start (1+ space))))))
+	    (#\D (let ((*timestamp-format* (connection-timestamp-format conn)))
+		   (funcall row-handler row-description r)))
+	    (#\Z (finish)))))
+      affected-rows)))
 
 (defun read-field (stream field)
   (declare (type field-description field))
