@@ -57,8 +57,7 @@ one, passing an input stream wherefrom the message can be read"
 
 (defclass async-database-connection (database-connection)
   ((buffer :initform (make-message-buffer))
-   (callback :initform nil)
-   (errback :initform nil)))
+   (message-promise :initform nil)))
 
 (defmacro single-message-case (socket &body clauses)
   "Non-recursive variant of helper macro for reading messages from the
@@ -114,19 +113,18 @@ from the socket."
 	   (,iter-name))))))
 
 (defun async-handle-message (conn stream)
-  (with-slots (callback errback) conn
-    (funcall (or (prog1 (shiftf callback nil)
-		   (shiftf errback nil))
-		 (lambda (stream)
-		   (let ((*connection-params* (connection-parameters conn)))
-		     (single-message-case stream)))) stream)))
+  (with-slots (message-promise) conn
+    (let ((was-waiting (shiftf message-promise nil)))
+      (if was-waiting
+	  (blackbird-base:finish was-waiting stream)
+	  (let ((*connection-params*
+		  (connection-parameters conn)))
+	    (single-message-case stream))))))
 
 (defun async-next-message (conn)
-  (bb:with-promise (resolve reject)
-    (setf (slot-value conn 'callback)
-	  (lambda (stream) (resolve stream))
-	  (slot-value conn 'errback)
-	  (lambda (e) (reject e)))))
+  (with-slots (message-promise) conn
+    (assert (not message-promise) () "Nested ASYNC-NEXT-MESSAGE on ~A" conn)
+    (setf message-promise (blackbird-base:make-promise :name "ASYNC-NEXT-MESSAGE"))))
 
 (defun async-do-while (promise-fn test-fn)
   (bb:with-promise (resolve reject)
@@ -186,9 +184,9 @@ from the socket."
 			     (lambda (stream)
 			       (async-handle-message conn stream))))
 	     (lambda (ev)
-	       (with-slots (errback) conn
-		 (if errback
-		     (funcall errback ev)
+	       (with-slots (message-promise) conn
+		 (if message-promise
+		     (bb:signal-error message-promise ev)
 		     (reject ev))))
 	     :connect-cb
 	     (lambda (socket)
