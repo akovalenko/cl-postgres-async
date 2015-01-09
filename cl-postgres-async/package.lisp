@@ -14,7 +14,9 @@
            #:connection-meta
            #:connection-parameters
            #:open-database
+	   #:async-open-database
            #:reopen-database
+	   #:async-reopen-database
            #:database-open-p
            #:close-database
            #:wait-for-notification

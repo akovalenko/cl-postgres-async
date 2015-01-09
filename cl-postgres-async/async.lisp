@@ -229,21 +229,25 @@ from the socket."
     (#\Z (finish))
     (t :skip)))
 
+(defmacro aprog1 (form &body body)
+  (let ((values-name (gensym "values-")))
+    `(bb:tap ,form (lambda (&rest ,values-name)
+		     (declare (ignore ,values-name))
+		     ,@body))))
+
 (defmacro with-async-syncing ((conn) &body body)
   (let ((ok (gensym "ok-"))
 	(sync-sent (gensym "sync-sent-")))
     `(let ((,sync-sent nil)
 	   (,ok nil))
        (bb:finally
-	   (bb:tap
-	    (flet ((sync-message (socket)
-		     (setf ,sync-sent t)
-		     (sync-message socket)))
-	      (declare (ignorable #'sync-message))
-	      ,@body)
-	    (lambda (&rest values)
-	      (declare (ignore values))
-	      (setf ,ok t)))
+	   (aprog1
+	       (flet ((sync-message (socket)
+			(setf ,sync-sent t)
+			(sync-message socket)))
+		 (declare (ignorable #'sync-message))
+		 ,@body)
+	     (setf ,ok t))
 	 (unless ,ok
 	   (try-to-sync-async ,conn ,sync-sent))))))
 
@@ -252,14 +256,11 @@ from the socket."
 	(query-name (gensym)))
     `(let ((,query-name ,query)
            (,time-name (if *query-callback* (get-internal-real-time) 0)))
-       (bb:tap
-	(progn ,@body)
-	(lambda (&rest values)
-	  (declare (ignore values))
-	  (when *query-callback*
-	    (funcall *query-callback*
-		     ,query-name
-		     (- (get-internal-real-time) ,time-name))))))))
+       (aprog1 (progn ,@body)
+	 (when *query-callback*
+	   (funcall *query-callback*
+		    ,query-name
+		    (- (get-internal-real-time) ,time-name)))))))
 
 (defmacro using-async-connection ((connection) &body body)
   (let ((connection-name (gensym)))
@@ -415,6 +416,10 @@ to the result."
 		  :host host :port port :user user
 		  :password password :socket nil :db database :ssl use-ssl
 		  :service service)))
+
+(defun async-reopen-database (conn)
+  (unless (database-open-p conn)
+    (async-initiate-connection conn)))
 
 (defun ignore-row-handler (fields stream)
   (declare (ignore fields stream)))
