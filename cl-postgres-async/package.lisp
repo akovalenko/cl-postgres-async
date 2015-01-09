@@ -21,8 +21,11 @@
            #:close-database
            #:wait-for-notification
            #:exec-query
+	   #:async-exec-query
            #:prepare-query
+	   #:async-prepare-query
            #:exec-prepared
+	   #:async-exec-prepared
            #:field-name
            #:field-type
            #:row-reader
