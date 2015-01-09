@@ -28,7 +28,8 @@
                          #+postmodern-async-use-mop
                          (:file "table" :depends-on ("util" "transaction"))
                          (:file "deftable" :depends-on
-                                ("query" #+postmodern-async-use-mop "table"))))))
+                                ("query" #+postmodern-async-use-mop "table"))
+			 (:file "async" :depends-on ("util" "transaction"))))))
 
 (defsystem :postmodern-async-tests
   :depends-on (:postmodern :eos :simple-date :simple-date-postgres-glue)
