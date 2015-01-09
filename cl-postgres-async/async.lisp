@@ -430,7 +430,7 @@ to the result."
   (using-async-connection (connection)
     (async-send-query connection query row-handler)))
 
-(defun async-prepare-queery (connection name query)
+(defun async-prepare-query (connection name query)
   (check-type query string)
   (using-async-connection (connection)
     (async-send-parse connection name query)))
