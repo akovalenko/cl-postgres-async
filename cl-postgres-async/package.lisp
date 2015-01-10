@@ -9,6 +9,7 @@
            #:database-error-cause
            #:database-error-constraint-name
            #:database-connection
+	   #:async-database-connection
            #:database-connection-error
            #:database-socket-error
            #:connection-meta
