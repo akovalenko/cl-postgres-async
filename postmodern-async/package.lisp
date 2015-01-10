@@ -2,7 +2,7 @@
   (:use #-postmodern-async-use-mop :common-lisp
         #+postmodern-async-use-mop :closer-common-lisp
         :s-sql :cl-postgres-async)
-  (:nicknames :pomo)
+  (:nicknames :apomo)
 
   #+postmodern-async-use-mop
   (:export
