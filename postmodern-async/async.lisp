@@ -7,6 +7,18 @@
 Stores the arguments used to create it, so different pools can be
 distinguished."))
 
+(defmethod disconnect ((connection pooled-async-database-connection))
+  "Add the connection to the corresponding pool, or drop it when the
+pool is full."
+  (macrolet ((the-pool ()
+               '(gethash (connection-pool-type connection) *connection-pools* ())))
+    (when (database-open-p connection)
+      (with-pool-lock
+        (if (or (not *max-pool-size*) (< (length (the-pool)) *max-pool-size*))
+            (push connection (the-pool))
+            (call-next-method))))
+    (values)))
+
 (defun async-connect (database user password host
 		      &key (port 5432) pooled-p
 			(use-ssl *default-use-ssl*) (service "postgres"))
