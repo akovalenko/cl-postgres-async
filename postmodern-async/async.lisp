@@ -1,6 +1,12 @@
 (in-package :postmodern-async)
 (pushnew '*database* bb:*promise-keep-specials*)
 
+(defclass pooled-async-database-connection (async-database-connection)
+  ((pool-type :initarg :pool-type :accessor connection-pool-type))
+  (:documentation "Type for database connections that are pooled.
+Stores the arguments used to create it, so different pools can be
+distinguished."))
+
 (defun async-connect (database user password host
 		      &key (port 5432) pooled-p
 			(use-ssl *default-use-ssl*) (service "postgres"))
@@ -8,9 +14,11 @@
   (cond (pooled-p
          (let ((type (list database user password host port use-ssl)))
            (or (get-from-pool type)
-               (bb:alet* ((connection (async-open-database database user password host port use-ssl)))
-                 (change-class connection 'pooled-database-connection :pool-type type)
-                 connection))))
+               (bb:alet* ((connection
+			   (async-open-database
+			    database user password host port use-ssl)))
+                 (change-class connection
+			       'pooled-async-database-connection :pool-type type)))))
         (t (async-open-database database user password host port use-ssl service))))
 
 (defmacro async-query (query &rest args/format)
