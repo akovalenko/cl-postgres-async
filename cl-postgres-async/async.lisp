@@ -137,6 +137,14 @@ from the socket."
 		(condition (c) (reject c)))))
       (iter))))
 
+(defmacro aprogn (&body body)
+  (let (last)
+    `(bb:alet* ,(loop for (head . tail) on body
+		      when tail
+			collect `(nil ,head)
+		      else do (setf last head))
+       ,last)))
+
 (defmacro ado-messages ((conn input
 			 &key
 			   (output (gensym "output"))
@@ -172,55 +180,53 @@ from the socket."
     (setf (connection-parameters conn)
 	  (make-hash-table :test 'equal))
     (setf (message-buffer-fill buffer) 0)
-    (bb:alet*
-	((nil
-	  (bb:with-promise (resolve reject)
-	    (async-socket-connect
-	     conn
-	     (lambda (sock chunk)
-	       (declare (ignorable sock))
-	       (push-chunk buffer chunk)
-	       (map-messages buffer
-			     (lambda (stream)
-			       (async-handle-message conn stream))))
-	     (lambda (ev)
-	       (with-slots (message-promise) conn
-		 (if message-promise
-		     (bb:signal-error message-promise ev)
-		     (reject ev))))
-	     :connect-cb
-	     (lambda (socket)
-	       (setf (connection-socket conn)
-		     (make-instance 'as:async-output-stream :socket socket))
-	       (resolve socket)))))
-	 (nil
-	  (let ((password (connection-password conn)))
-	    (startup-message (connection-socket conn)
-			     (connection-user conn)
-			     (connection-db conn))
-	    (ado-messages (conn r :output w)
-	      (#\R
-	       (let ((type (read-uint4 r)))
-		 (ecase type
-		   (0 (finish))
-		   (3 (unless password
-			(error "Server requested plain-password authentication, but no password was given."))
-		    (plain-password-message w password)
-		    (finish))
-		   (5 (unless password
-			(error "Server requested md5-password authentication, but no password was given."))
-		    (md5-password-message w password
-					  (connection-user conn)
-					  (read-bytes r 4)))))))))
-	 (nil
-	  (ado-messages (conn r)
-	    (#\K)
-	    (#\Z (finish)))))
-      (setf (connection-timestamp-format conn)
-	    (if (string= (gethash "integer_datetimes"
-				  (connection-parameters conn)) "on")
-		:integer :float))
-      conn)))
+    (aprogn
+      (bb:with-promise (resolve reject)
+	(async-socket-connect
+	 conn
+	 (lambda (sock chunk)
+	   (declare (ignorable sock))
+	   (push-chunk buffer chunk)
+	   (map-messages buffer
+			 (lambda (stream)
+			   (async-handle-message conn stream))))
+	 (lambda (ev)
+	   (with-slots (message-promise) conn
+	     (if message-promise
+		 (bb:signal-error message-promise ev)
+		 (reject ev))))
+	 :connect-cb
+	 (lambda (socket)
+	   (setf (connection-socket conn)
+		 (make-instance 'as:async-output-stream :socket socket))
+	   (resolve socket))))
+      (let ((password (connection-password conn)))
+	(startup-message (connection-socket conn)
+			 (connection-user conn)
+			 (connection-db conn))
+	(ado-messages (conn r :output w)
+	  (#\R
+	   (let ((type (read-uint4 r)))
+	     (ecase type
+	       (0 (finish))
+	       (3 (unless password
+		    (error "Server requested plain-password authentication, but no password was given."))
+		(plain-password-message w password)
+		(finish))
+	       (5 (unless password
+		    (error "Server requested md5-password authentication, but no password was given."))
+		(md5-password-message w password
+				      (connection-user conn)
+				      (read-bytes r 4))))))))
+      (ado-messages (conn r)
+	(#\K)
+	(#\Z (finish)))
+      (progn
+	(setf (connection-timestamp-format conn)
+	      (if (string= (gethash "integer_datetimes"
+				    (connection-parameters conn)) "on")
+		  :integer :float))
+	conn))))
 
 (defun try-to-sync-async (conn sync-sent)
   (unless sync-sent
@@ -297,43 +303,39 @@ to the result."
     (declare (type (unsigned-byte 16) n-parameters)
 	     (type function row-handler))
     (with-async-syncing (conn)
-      (bb:alet*
-	  ((nil
-	    (progn
-	      (describe-prepared-message socket name)
-	      (flush-message socket)
-	      (ado-messages (conn r)
-		;; ParameterDescription
-		(#\t (setf n-parameters (read-uint2 r))
-		     (finish)))))
-	   (nil
-	    (ado-messages (conn r)
-	      (#\T (setf row-description (read-field-descriptions r))
-		   (finish))
-	      (#\n (finish))))
-	   (nil
-	    (progn
-	      (unless (= (length parameters) n-parameters)
-		(error 'database-error
-		       :message (format nil "Incorrect number of parameters given for prepared statement ~A." name)))
-	      (bind-message socket name (map 'vector 'field-binary-p row-description)
-			    parameters)
-	      (simple-execute-message socket)
-	      (sync-message socket)
-	      (ado-messages (conn r)
-		;; BindComplete
-		(#\2 (finish)))))
-	   (nil
-	    (ado-messages (conn r)
-	      (#\C (let* ((command-tag (read-str r))
-			  (space (position #\Space command-tag :from-end t)))
-		     (when space
-		       (setf affected-rows
-			     (parse-integer command-tag :junk-allowed t
-							:start (1+ space))))))
-	      (#\D (let ((*timestamp-format* (connection-timestamp-format conn)))
-		     (funcall row-handler row-description r)))
-	      (#\Z (finish)))))
+      (aprogn
+	(progn
+	  (describe-prepared-message socket name)
+	  (flush-message socket)
+	  (ado-messages (conn r)
+	    ;; ParameterDescription
+	    (#\t (setf n-parameters (read-uint2 r))
+		 (finish))))
+	(ado-messages (conn r)
+	  (#\T (setf row-description (read-field-descriptions r))
+	       (finish))
+	  (#\n (finish)))
+	(progn
+	  (unless (= (length parameters) n-parameters)
+	    (error 'database-error
+		   :message (format nil "Incorrect number of parameters given for prepared statement ~A." name)))
+	  (bind-message socket name (map 'vector 'field-binary-p row-description)
+			parameters)
+	  (simple-execute-message socket)
+	  (sync-message socket)
+	  (ado-messages (conn r)
+	    ;; BindComplete
+	    (#\2 (finish))))
+	(ado-messages (conn r)
+	  (#\C (let* ((command-tag (read-str r))
+		      (space (position #\Space command-tag :from-end t)))
+		 (when space
+		   (setf affected-rows
+			 (parse-integer command-tag :junk-allowed t
+						    :start (1+ space))))))
+	  (#\D (let ((*timestamp-format* (connection-timestamp-format conn)))
+		 (funcall row-handler row-description r)))
+	  (#\Z (finish)))
 	affected-rows))))
 
 (defun async-send-query (conn query row-handler)
@@ -346,38 +348,34 @@ to the result."
 		       (symbol (symbol-function row-handler)))))
     (with-async-syncing (conn)
       (with-async-query (query)
-	(bb:alet*
-	    ((nil
-	      (progn
-		(simple-parse-message socket query)
-		(simple-describe-message socket)
-		(flush-message socket)
-		(ado-messages (conn r)
-		  (#\1 (finish)))))
-	     (nil
-	      (ado-messages (conn r)
-		(#\t :skip)
-		(#\T (setf row-description (read-field-descriptions r))
-		     (finish))
-		(#\n (finish))))
-	     (nil
-	      (progn
-		(simple-bind-message socket (map 'vector 'field-binary-p row-description))
-		(simple-execute-message socket)
-		(sync-message socket)
-		(ado-messages (conn r)
-		  (#\2 (finish)))))
-	     (nil
-	      (ado-messages (conn r)
-		(#\C (let* ((command-tag (read-str r))
-			    (space (position #\Space command-tag :from-end t)))
-		       (when space
-			 (setf affected-rows
-			       (parse-integer command-tag :junk-allowed t
-							  :start (1+ space))))))
-		(#\D (let ((*timestamp-format* (connection-timestamp-format conn)))
-		       (funcall row-handler row-description r)))
-		(#\Z (finish)))))
+	(aprogn
+	  (progn
+	    (simple-parse-message socket query)
+	    (simple-describe-message socket)
+	    (flush-message socket)
+	    (ado-messages (conn r)
+	      (#\1 (finish))))
+	  (ado-messages (conn r)
+	    (#\t :skip)
+	    (#\T (setf row-description (read-field-descriptions r))
+		 (finish))
+	    (#\n (finish)))
+	  (progn
+	    (simple-bind-message socket (map 'vector 'field-binary-p row-description))
+	    (simple-execute-message socket)
+	    (sync-message socket)
+	    (ado-messages (conn r)
+	      (#\2 (finish))))
+	  (ado-messages (conn r)
+	    (#\C (let* ((command-tag (read-str r))
+			(space (position #\Space command-tag :from-end t)))
+		   (when space
+		     (setf affected-rows
+			   (parse-integer command-tag :junk-allowed t
+						      :start (1+ space))))))
+	    (#\D (let ((*timestamp-format* (connection-timestamp-format conn)))
+		   (funcall row-handler row-description r)))
+	    (#\Z (finish)))
 	  affected-rows)))))
 
 (defun read-field (stream field)
