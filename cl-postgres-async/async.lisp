@@ -137,14 +137,6 @@ from the socket."
 		(condition (c) (reject c)))))
       (iter))))
 
-(defmacro aprogn (&body body)
-  (let (last)
-    `(bb:alet* ,(loop for (head . tail) on body
-		      when tail
-			collect `(nil ,head)
-		      else do (setf last head))
-       ,last)))
-
 (defmacro ado-messages ((conn input
 			 &key
 			   (output (gensym "output"))
@@ -180,7 +172,7 @@ from the socket."
     (setf (connection-parameters conn)
 	  (make-hash-table :test 'equal))
     (setf (message-buffer-fill buffer) 0)
-    (aprogn
+    (bb:walk
       (bb:with-promise (resolve reject)
 	(async-socket-connect
 	 conn
@@ -303,7 +295,7 @@ to the result."
     (declare (type (unsigned-byte 16) n-parameters)
 	     (type function row-handler))
     (with-async-syncing (conn)
-      (aprogn
+      (bb:walk
 	(progn
 	  (describe-prepared-message socket name)
 	  (flush-message socket)
@@ -348,7 +340,7 @@ to the result."
 		       (symbol (symbol-function row-handler)))))
     (with-async-syncing (conn)
       (with-async-query (query)
-	(aprogn
+	(bb:walk
 	  (progn
 	    (simple-parse-message socket query)
 	    (simple-describe-message socket)
