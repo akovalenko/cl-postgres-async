@@ -227,25 +227,19 @@ from the socket."
     (#\Z (finish))
     (t :skip)))
 
-(defmacro aprog1 (form &body body)
-  (let ((values-name (gensym "values-")))
-    `(bb:tap ,form (lambda (&rest ,values-name)
-		     (declare (ignore ,values-name))
-		     ,@body))))
-
 (defmacro with-async-syncing ((conn) &body body)
   (let ((ok (gensym "ok-"))
 	(sync-sent (gensym "sync-sent-")))
     `(let ((,sync-sent nil)
 	   (,ok nil))
        (bb:finally
-	   (aprog1
-	       (flet ((sync-message (socket)
-			(setf ,sync-sent t)
-			(sync-message socket)))
-		 (declare (ignorable #'sync-message))
-		 ,@body)
-	     (setf ,ok t))
+	   (bb:walk1
+	    (flet ((sync-message (socket)
+		     (setf ,sync-sent t)
+		     (sync-message socket)))
+	      (declare (ignorable #'sync-message))
+	      ,@body)
+	    (setf ,ok t))
 	 (unless ,ok
 	   (try-to-sync-async ,conn ,sync-sent))))))
 
@@ -254,11 +248,11 @@ from the socket."
 	(query-name (gensym)))
     `(let ((,query-name ,query)
            (,time-name (if *query-callback* (get-internal-real-time) 0)))
-       (aprog1 (progn ,@body)
-	 (when *query-callback*
-	   (funcall *query-callback*
-		    ,query-name
-		    (- (get-internal-real-time) ,time-name)))))))
+       (bb:walk1 (progn ,@body)
+		 (when *query-callback*
+		   (funcall *query-callback*
+			    ,query-name
+			    (- (get-internal-real-time) ,time-name)))))))
 
 (defmacro using-async-connection ((connection) &body body)
   (let ((connection-name (gensym)))
