@@ -146,3 +146,56 @@ it."
        (def-async-prepared ,prepared-name ,query ,format)
        (defun ,name ,args
 	 (,prepared-name ,@query-args)))))
+
+(defun async-sequence-next (sequence)
+  "Shortcut for getting the next value from a sequence."
+  (async-query (:select (:nextval (to-identifier sequence))) :single))
+
+(defun async-list-tables (&optional strings-p)
+  "Return a list of the tables in a database. Turn them into keywords
+if strings-p is not true."
+  (bb:alet ((result (async-query (make-list-query "r") :column)))
+    (if strings-p result (mapcar 'from-sql-name result))))
+
+(defun async-table-exists-p (table)
+  "Check whether a table exists. Takes either a string or a symbol for
+the table name."
+  (async-query (make-exists-query "r" table) :single))
+
+(defun async-list-sequences (&optional strings-p)
+  "Return a list of the sequences in a database. Turn them into
+keywords if strings-p is not true."
+  (bb:alet ((result (async-query (make-list-query "S") :column)))
+    (if strings-p result (mapcar 'from-sql-name result))))
+
+(defun async-sequence-exists-p (sequence)
+  "Check whether a sequence exists. Takes either a string or a symbol
+for the sequence name."
+  (async-query (make-exists-query "S" sequence) :single))
+
+(defun async-list-views (&optional strings-p)
+  "Return a list of the views in a database. Turn them into keywords
+if strings-p is not true."
+  (bb:alet ((result (async-query (make-list-query "v") :column)))
+    (if strings-p result (mapcar 'from-sql-name result))))
+
+(defun async-view-exists-p (view)
+  "Check whether a view exists. Takes either a string or a symbol for
+the view name."
+  (async-query (make-exists-query "v" view) :single))
+
+(defun async-table-description (table &optional schema-name)
+  "Return a list of (name type null-allowed) lists for the fields of a
+table.  If SCHEMA-NAME is specified, only fields from that schema are
+returned."
+  (let ((schema-test (if schema-name (sql (:= 'pg-namespace.nspname schema-name)) "true")))
+    (bb:alet ((rows
+	       (async-query (:order-by (:select 'attname 'typname (:not 'attnotnull) 'attnum :distinct
+                               :from 'pg-catalog.pg-attribute
+                               :inner-join 'pg-catalog.pg-type :on (:= 'pg-type.oid 'atttypid)
+                               :inner-join 'pg-catalog.pg-class :on (:and (:= 'pg-class.oid 'attrelid)
+                                                                          (:= 'pg-class.relname (to-identifier table)))
+                               :inner-join 'pg-catalog.pg-namespace :on (:= 'pg-namespace.oid 'pg-class.relnamespace)
+                               :where (:and (:> 'attnum 0) (:raw schema-test)))
+				       'attnum))))
+      (mapcar #'butlast rows))))
