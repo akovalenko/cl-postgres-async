@@ -60,6 +60,12 @@ it specifies the format in which the results should be returned."
 	     (bb:alet ((affected ,base))
 	       (,result-form (values result affected)))))))))
 
+(defmacro async-execute (query &rest args)
+  "Execute a query, ignore the results."
+  `(bb:multiple-promise-bind (nil rows)
+			     (async-query ,query ,@args :none)
+     (if rows (values rows rows) 0)))
+
 (defmacro with-async-connection (spec &body body)
   (let ((conn (gensym)))
     `(bb:alet* ((,conn (apply #'async-connect ,spec)))
