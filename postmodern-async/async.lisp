@@ -43,11 +43,26 @@ it specifies the format in which the results should be returned."
 			     (assoc arg *result-styles*)) :do (setf format arg)
                      :else :collect arg)))
     (destructuring-bind (reader result-form) (reader-for-format format)
-      (let ((base (if args
-                      `(bb:alet*
-			   ((nil (async-prepare-query  *database* "" ,(real-query query)))
-			    (result
-			     (async-exec-prepared *database* "" (list ,@args) ,reader)))
-			 result)
-                      `(async-exec-query *database* ,(real-query query) ,reader))))
-        `(,result-form ,base)))))
+      (let*
+	  ((handler `(cl-postgres-async::row-handler-by-reader #'add-row ,reader))
+	   (base (if args
+		     `(bb:walk
+			(async-prepare-query  *database* "" ,(real-query query))
+			(async-exec-prepared *database* "" (list ,@args) ,handler))
+		     `(async-exec-query *database* ,(real-query query) ,handler))))
+	`(let (result tail)
+	   (flet ((add-row (list)
+		    (if result
+			(progn (rplacd tail list)
+			       (setf tail list))
+			(progn (setf result list
+				     tail list)))))
+	     (bb:alet ((affected ,base))
+	       (,result-form (values result affected)))))))))
+
+(defmacro with-async-connection (spec &body body)
+  (let ((conn (gensym)))
+    `(bb:alet* ((,conn (apply #'async-connect ,spec)))
+       (let ((*database* ,conn))
+	 (bb:finally (bb:walk ,@body)
+	   (disconnect ,conn))))))
