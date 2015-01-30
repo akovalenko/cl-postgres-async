@@ -116,6 +116,6 @@ referenced."
   (format nil "ALTER TABLE ~A ADD CONSTRAINT ~A UNIQUE (~{~A~^, ~}) ~:[NOT DEFERRABLE~;DEFERRABLE INITIALLY ~:[IMMEDIATE~;DEFERRED~]~]"
           (to-sql-name *table-name*)
           (to-sql-name (format nil "~A_~{~A~^_~}_unique" *table-name* target-fields))
-          (mapcar #'pomo::to-sql-name target-fields)
+          (mapcar #'to-sql-name target-fields)
           deferrable
           initially-deferred))
