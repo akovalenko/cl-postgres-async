@@ -99,3 +99,50 @@ it specifies the format in which the results should be returned."
 	   (async-exec-query *database* ,query-name
 			     (cl-postgres-async::row-handler-by-reader
 			      #'identity ,reader-expr))))))
+
+(defun async-ensure-prepared (connection id query)
+  (let ((meta (connection-meta connection)))
+    (unless (gethash id meta)
+      (setf (gethash id meta) t)
+      (async-prepare-query connection (symbol-name id) query))))
+
+(defun async-generate-prepared (function-form query format)
+  "Helper macro for the following two functions."
+  (destructuring-bind (reader result-form) (reader-for-format format)
+    (let* ((base `(async-exec-prepared *database* (symbol-name statement-id) params
+				       (cl-postgres-async::row-handler-by-reader
+					#'add-row ,reader)))
+	   (wrapped
+	     `(let (result tail)
+		(flet ((add-row (list)
+			 (if result
+			     (setf (cdr tail) list
+				   tail list)
+			     (setf result list
+				   tail list))))
+		  (bb:alet* ((affected ,base))
+		    (values result affected))))))
+      `(let ((statement-id (next-statement-id))
+             (query ,(real-query query)))
+	 (,@function-form (&rest params)
+			  (bb:walk
+			    (async-ensure-prepared *database* statement-id query)
+			    (,result-form ,wrapped)))))))
+
+(defmacro async-prepare (query &optional (format :rows))
+  (async-generate-prepared `(lambda) query format))
+
+(defmacro def-async-prepared (name query &optional (format :rows))
+  "Like async-prepare, but gives the function a name instead of returning
+it."
+  (async-generate-prepared `(defun ,name) query format))
+
+(defmacro def-async-prepared-with-names (name (&rest args)
+					 (query &rest query-args)
+					 &optional (format :rows))
+  "Like def-async-prepared, but with lambda list for statement arguments."
+  (let ((prepared-name (gensym "STATEMENT")))
+    `(progn
+       (def-async-prepared ,prepared-name ,query ,format)
+       (defun ,name ,args
+	 (,prepared-name ,@query-args)))))
