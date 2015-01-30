@@ -37,10 +37,10 @@
   ((:module :postmodern
             :components ((:file "tests")))))
 
-(defmethod perform ((op asdf:test-op) (system (eql (find-system :postmodern))))
-  (asdf:oos 'asdf:load-op :postmodern)
+(defmethod perform ((op asdf:test-op) (system (eql (find-system :postmodern-async))))
+  (asdf:oos 'asdf:load-op :postmodern-async)
   (asdf:oos 'asdf:load-op :cl-postgres-async-tests)
   (asdf:oos 'asdf:load-op :postmodern-async-tests)
-  (funcall (intern (string :prompt-connection) (string :cl-postgres-tests))
+  (funcall (intern (string :prompt-connection) (string :cl-postgres-async-tests))
            (eval (intern (string :*test-connection*) (string :postmodern-async-tests))))
-  (funcall (intern (string :run!) (string :Eos)) :postmodern))
+  (funcall (intern (string :run!) (string :Eos)) :postmodern-async))
