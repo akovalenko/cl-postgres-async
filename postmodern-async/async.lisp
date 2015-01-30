@@ -66,3 +66,30 @@ it specifies the format in which the results should be returned."
        (let ((*database* ,conn))
 	 (bb:finally (bb:walk ,@body)
 	   (disconnect ,conn))))))
+
+(defmacro do-async-query (query (&rest names) &body body)
+  (let* ((fields (gensym))
+	 (query-name (gensym))
+	 args
+	 (reader-expr
+	   `(row-reader (,fields)
+	      (unless (= ,(length names) (length ,fields))
+		(error "Number of field names does not match number of selected fields in query ~A." ,query-name))
+	      (progn (next-row)
+		     (let ,(loop :for i :from 0
+				 :for name :in names
+				 :collect `(,name (next-field (elt ,fields ,i))))
+		       ,@body)))))
+    (when (and (consp query) (not (keywordp (first query))))
+      (setf args (cdr query) query (car query)))
+    (if args
+	`(let ((,query-name ,(real-query query)))
+	   (bb:walk
+	     (async-prepare-query *database* "" ,query-name)
+	     (async-exec-prepared *database* "" (list ,@args)
+				  (cl-postgres-async::row-handler-by-reader
+				   #'identity ,reader-expr))))
+	`(let ((,query-name ,(real-query query)))
+	   (async-exec-query *database* ,query-name
+			     (cl-postgres-async::row-handler-by-reader
+			      #'identity ,reader-expr))))))
