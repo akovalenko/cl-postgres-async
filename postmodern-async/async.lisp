@@ -53,11 +53,11 @@ it specifies the format in which the results should be returned."
 	`(let (result tail)
 	   (flet ((add-row (list)
 		    (if result
-			(progn (rplacd tail list)
-			       (setf tail list))
-			(progn (setf result list
-				     tail list)))))
-	     (bb:alet ((affected ,base))
+			(setf (cdr tail) list
+			      tail list)
+			(setf result list
+			      tail list))))
+	     (bb:alet* ((affected ,base))
 	       (,result-form (values result affected)))))))))
 
 (defmacro async-execute (query &rest args)
