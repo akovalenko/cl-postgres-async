@@ -239,10 +239,10 @@ body exits normally, and aborting otherwise. An optional name can be
 given to the transaction, which can be used to force a commit or abort
 before the body unwinds."
   (if name
-      `(call-with-async-transaction (lambda (,name) ,@body))
+      `(call-with-async-transaction (lambda (,name) (bb:walk ,@body)))
       (let ((ignored (gensym)))
         `(call-with-async-transaction
-	  (lambda (,ignored) (declare (ignore ,ignored)) ,@body)))))
+	  (lambda (,ignored) (declare (ignore ,ignored)) (bb:walk ,@body))))))
 
 
 (defun async-release-savepoint (savepoint)
@@ -291,10 +291,10 @@ before the body unwinds."
                              name
                              (gensym)))
 	 (effective-body (if name-p
-                             `(lambda (,name) ,@body)
+                             `(lambda (,name) (bb:walk ,@body))
                              `(lambda (,effective-name)
                                 (declare (ignore ,effective-name))
-                                ,@body))))
+                                (bb:walk ,@body)))))
     `(call-with-async-logical-transaction ',effective-name ,effective-body)))
 
 (defun call-with-ensured-async-transaction (thunk)
@@ -305,4 +305,4 @@ before the body unwinds."
 (defmacro ensure-async-transaction (&body body)
   "Executes body within a with-transaction form if and only if no
 transaction is already in progress."
-  `(call-with-ensured-async-transaction (lambda () ,@body)))
+  `(call-with-ensured-async-transaction (lambda () (bb:walk ,@body))))
