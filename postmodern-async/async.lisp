@@ -199,3 +199,110 @@ returned."
                                :where (:and (:> 'attnum 0) (:raw schema-test)))
 				       'attnum))))
       (mapcar #'butlast rows))))
+
+
+(defun async-commit-transaction (transaction)
+  "Immediately commit an open transaction."
+  (when (transaction-open-p transaction)
+    (bb:walk
+      (let ((*database* (transaction-connection transaction)))
+	(async-execute "COMMIT"))
+      (progn
+	(setf (transaction-open-p transaction) nil)
+	(mapc #'funcall (commit-hooks transaction))))))
+
+(defun async-abort-transaction (transaction)
+  (when (transaction-open-p transaction)
+    (bb:walk
+      (let ((*database* (transaction-connection transaction)))
+	(async-execute "ABORT"))
+      (progn
+	(setf (transaction-open-p transaction) nil)
+	(mapc #'funcall (abort-hooks transaction))))))
+
+(defun call-with-async-transaction (body)
+  (let ((transaction (make-instance 'transaction-handle)))
+    (incf (cl-postgres-async::adb-transaction-level *database*))
+    (push transaction (cl-postgres-async::adb-transaction-stack *database*))
+    (bb:finally
+	(bb:walk
+	  (async-execute "BEGIN")
+	  (funcall body transaction)
+	  (async-commit-transaction transaction))
+      (decf (cl-postgres-async::adb-transaction-level *database*))
+      (pop (cl-postgres-async::adb-transaction-stack *database*))
+      (async-abort-transaction transaction))))
+
+(defmacro with-async-transaction ((&optional name) &body body)
+  "Execute the body within a database transaction, committing when the
+body exits normally, and aborting otherwise. An optional name can be
+given to the transaction, which can be used to force a commit or abort
+before the body unwinds."
+  (if name
+      `(call-with-async-transaction (lambda (,name) ,@body))
+      (let ((ignored (gensym)))
+        `(call-with-async-transaction
+	  (lambda (,ignored) (declare (ignore ,ignored)) ,@body)))))
+
+
+(defun async-release-savepoint (savepoint)
+  "Immediately release a savepoint, commiting its results."
+  (when (savepoint-open-p savepoint)
+    (let ((*database* (savepoint-connection savepoint)))
+      (bb:walk
+	(async-execute (format nil "RELEASE SAVEPOINT ~A"
+			       (savepoint-name savepoint)))
+	(progn
+	  (setf (transaction-open-p savepoint) nil)
+	  (mapc #'funcall (commit-hooks savepoint)))))))
+
+(defun async-rollback-savepoint (savepoint)
+  "Immediately roll back a savepoint, aborting it results."
+  (when (savepoint-open-p savepoint)
+    (let ((*database* (savepoint-connection savepoint)))
+      (bb:walk
+	(async-execute (format nil "ROLLBACK TO SAVEPOINT ~A"
+			       (savepoint-name savepoint))))
+      (progn	
+	(setf (savepoint-open-p savepoint) nil)
+	(mapc #'funcall (abort-hooks savepoint))))))
+
+(defun call-with-async-savepoint (name body)
+  (let ((savepoint (make-instance 'savepoint-handle :name (to-sql-name name))))
+    (incf (cl-postgres-async::adb-transaction-level *database*))
+    (push savepoint (cl-postgres-async::adb-transaction-stack *database*))
+    (bb:finally
+	(bb:walk
+	  (async-execute (format nil "SAVEPOINT ~A" (savepoint-name savepoint)))
+	  (funcall body savepoint)
+	  (async-release-savepoint savepoint))
+      (progn
+      	(decf (cl-postgres-async::adb-transaction-level *database*))
+	(pop (cl-postgres-async::adb-transaction-stack *database*))
+	(async-rollback-savepoint savepoint)))))
+
+(defun call-with-async-logical-transaction (name body)
+  (if (zerop (cl-postgres-async::adb-transaction-level *database*))
+      (call-with-async-transaction body)
+      (call-with-async-savepoint name body)))
+
+(defmacro with-async-logical-transaction ((&optional (name nil name-p)) &body body)
+  (let* ((effective-name (if name-p
+                             name
+                             (gensym)))
+	 (effective-body (if name-p
+                             `(lambda (,name) ,@body)
+                             `(lambda (,effective-name)
+                                (declare (ignore ,effective-name))
+                                ,@body))))
+    `(call-with-async-logical-transaction ',effective-name ,effective-body)))
+
+(defun call-with-ensured-async-transaction (thunk)
+  (if (zerop (cl-postgres-async::adb-transaction-level *database*))
+      (with-async-transaction () (funcall thunk))
+      (funcall thunk)))
+
+(defmacro ensure-async-transaction (&body body)
+  "Executes body within a with-transaction form if and only if no
+transaction is already in progress."
+  `(call-with-ensured-async-transaction (lambda () ,@body)))

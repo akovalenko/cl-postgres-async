@@ -57,7 +57,11 @@ one, passing an input stream wherefrom the message can be read"
 
 (defclass async-database-connection (database-connection)
   ((buffer :initform (make-message-buffer))
-   (message-promise :initform nil)))
+   (message-promise :initform nil)
+   (logical-transaction-stack
+    :initform nil :accessor adb-transaction-stack)
+   (transaction-level
+    :initform 0 :accessor adb-transaction-level)))
 
 (defmacro single-message-case (socket &body clauses)
   "Non-recursive variant of helper macro for reading messages from the
