@@ -262,10 +262,10 @@ before the body unwinds."
     (let ((*database* (savepoint-connection savepoint)))
       (bb:walk
 	(async-execute (format nil "ROLLBACK TO SAVEPOINT ~A"
-			       (savepoint-name savepoint))))
-      (progn	
-	(setf (savepoint-open-p savepoint) nil)
-	(mapc #'funcall (abort-hooks savepoint))))))
+			       (savepoint-name savepoint)))
+	(progn
+	  (setf (savepoint-open-p savepoint) nil)
+	  (mapc #'funcall (abort-hooks savepoint)))))))
 
 (defun call-with-async-savepoint (name body)
   (let ((savepoint (make-instance 'savepoint-handle :name (to-sql-name name))))
