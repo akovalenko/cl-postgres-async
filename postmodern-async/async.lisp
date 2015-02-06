@@ -281,6 +281,12 @@ before the body unwinds."
 	(pop (cl-postgres-async::adb-transaction-stack *database*))
 	(async-rollback-savepoint savepoint)))))
 
+(defmacro with-async-savepoint (name &body body)
+  `(call-with-async-savepoint
+    ',name
+    (lambda (,name) (declare (ignorable ,name))
+      (bb:walk ,@body))))
+
 (defun call-with-async-logical-transaction (name body)
   (if (zerop (cl-postgres-async::adb-transaction-level *database*))
       (call-with-async-transaction body)
