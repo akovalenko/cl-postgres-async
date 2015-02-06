@@ -46,6 +46,28 @@
    ;; Condition type from cl-postgres
    #:database-error #:database-error-message #:database-error-code
    #:database-error-detail #:database-error-query #:database-error-cause
-   #:database-connection-error #:database-error-constraint-name))
+   #:database-connection-error #:database-error-constraint-name
+
+   ;; Async interface
+   #:async-database-connection
+   #:async-connect
+   #:with-async-connection
+   #:async-query
+   #:async-execute
+   #:do-async-query
+   #:async-prepare
+   #:def-async-prepared
+   #:def-async-prepared-with-names
+   #:async-sequence-next #:async-list-sequences #:async-sequence-exists-p
+   #:async-list-tables #:async-table-exists-p
+   #:async-list-views #:async-view-exists-p
+   #:async-table-description
+
+   #:async-commit-transaction #:async-abort-transaction
+   #:with-async-transaction
+   #:async-release-savepoint #:async-rollback-savepoint
+   #:with-async-savepoint
+   #:with-async-logical-transaction
+   #:ensure-async-transaction))
 
 (in-package :postmodern-async)
