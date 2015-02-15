@@ -66,8 +66,8 @@
         (reduce 'union (mapcar 'direct-keys (dao-superclasses class))))
   (unless (every (lambda (x) (member x (dao-column-fields class))) (dao-keys class))
     (error "Class ~A has a key that is not also a slot." (class-name class)))
-  (build-dao-methods class))
-
+  (build-dao-methods class)
+  (build-async-dao-methods class))
 
 (defclass direct-column-slot (standard-direct-slot-definition)
   ((col-type :initarg :col-type :reader column-type)

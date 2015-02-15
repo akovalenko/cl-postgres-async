@@ -312,3 +312,210 @@ before the body unwinds."
   "Executes body within a with-transaction form if and only if no
 transaction is already in progress."
   `(call-with-ensured-async-transaction (lambda () (bb:walk ,@body))))
+
+(defun async-query-dao% (type query row-reader &rest args)
+  (let ((class (find-class type)))
+    (unless (class-finalized-p class)
+      (finalize-inheritance class))
+    (let (result tail)
+      (flet ((add-row (list)
+	       (if result
+		   (setf (cdr tail) list
+			 tail list)
+		   (setf result list
+			 tail list))))
+	(let ((row-handler
+		(cl-postgres-async::row-handler-by-reader
+		 #'add-row row-reader)))
+	  (bb:walk
+	    (if args
+		(bb:walk
+		  (async-prepare-query *database* "" query)
+		  (async-exec-prepared *database* "" args row-handler))
+		(async-exec-query *database* query row-handler))
+	    result))))))
+
+(defmacro async-query-dao (type query &rest args)
+  `(flet ((query-dao% (&rest args)
+	    (apply #'async-query-dao% args)))
+     (query-dao ,type ,query ,@args)))
+
+(defmacro async-select-dao (type &optional (test t) &rest ordering)
+  "Select daos for the rows in its table for which the given test
+holds, order them by the given criteria."
+  `(async-query-dao% ,type (sql ,(generate-dao-query type test ordering))
+		     (dao-row-reader (find-class ,type))))
+
+
+
+
+(defgeneric async-dao-exists-p (dao)
+  (:documentation "Return a boolean indicating whether the given dao
+  exists in the database."))
+(defgeneric async-insert-dao (dao)
+  (:documentation "Insert the given object into the database."))
+(defgeneric async-update-dao (dao)
+  (:documentation "Update the object's representation in the database
+  with the values in the given instance."))
+(defgeneric async-delete-dao (dao)
+  (:documentation "Delete the given dao from the database."))
+(defgeneric async-upsert-dao (dao)
+  (:documentation "Update or insert the given dao.  If its primary key
+  is already in the database and all slots are bound, an update will
+  occur.  Otherwise it tries to insert it."))
+(defgeneric async-get-dao (type &rest args)
+  (:method ((class-name symbol) &rest args)
+    (let ((class (find-class class-name)))
+      (if (class-finalized-p class)
+          (error "Class ~a has no key slots." (class-name class))
+          (finalize-inheritance class))
+      (apply 'async-get-dao class-name args)))
+  (:documentation "Get the object corresponding to the given primary
+  key, or return nil if it does not exist."))
+(defgeneric async-make-dao (type &rest args &key &allow-other-keys)
+  (:method ((class-name symbol) &rest args &key &allow-other-keys)
+    (let ((class (find-class class-name)))
+      (apply 'async-make-dao class args)))
+  (:method ((class dao-class) &rest args &key &allow-other-keys)
+    (unless (class-finalized-p class)
+      (finalize-inheritance class))
+    (let ((instance (apply #'make-instance class args)))
+      (async-insert-dao instance)))
+  (:documentation "Make the instance of the given class and insert it into the database"))
+
+(defun build-async-dao-methods (class)
+  "Synthesise a number of methods for a newly defined DAO class.
+\(Done this way because some of them are not defined in every
+situation, and each of them needs to close over some pre-computed
+values.)"
+
+  #- (and)
+  (setf (slot-value class 'column-map)
+	(mapcar (lambda (s) (cons (slot-sql-name s) (slot-definition-name s))) (dao-column-slots class)))
+
+  (%eval
+   `(let* ((fields (dao-column-fields ,class))
+	   (key-fields (dao-keys ,class))
+	   (ghost-slots (remove-if-not 'ghost (dao-column-slots ,class)))
+	   (ghost-fields (mapcar 'slot-definition-name ghost-slots))
+	   (value-fields (remove-if (lambda (x) (or (member x key-fields) (member x ghost-fields))) fields))
+	   (table-name (dao-table-name ,class)))
+      (labels ((field-sql-name (field)
+		 (make-symbol (car (find field (slot-value ,class 'column-map) :key #'cdr :test #'eql))))
+	       (test-fields (fields)
+		 `(:and ,@(loop :for field :in fields :collect (list := (field-sql-name field) '$$))))
+	       (set-fields (fields)
+		 (loop :for field :in fields :append (list (field-sql-name field) '$$)))
+	       (slot-values (object &rest slots)
+		 (loop :for slot :in (apply 'append slots) :collect (slot-value object slot))))
+
+	;; When there is no primary key, a lot of methods make no sense.
+	(when key-fields
+	  (let ((tmpl (sql-template `(:select (:exists (:select t :from ,table-name
+							:where ,(test-fields key-fields)))))))
+	    (defmethod async-dao-exists-p ((object ,class))
+	      (and (every (lambda (s) (slot-boundp object s)) key-fields)
+		   (async-query (apply tmpl (slot-values object key-fields)) :single))))
+
+	  ;; When all values are primary keys, updating makes no sense.
+	  (when value-fields
+	    (let ((tmpl (sql-template `(:update ,table-name :set ,@(set-fields value-fields)
+					:where ,(test-fields key-fields)))))
+	      (defmethod async-update-dao ((object ,class))
+		(bb:alet ((n (async-execute (apply tmpl (slot-values object value-fields key-fields)))))
+		  (when (zerop n)
+		    (error "Updated row does not exist."))
+		  object))
+
+	      (defmethod async-upsert-dao ((object ,class))
+		(bb:catcher
+		 (bb:alet ((n (async-execute (apply tmpl (slot-values object value-fields key-fields)))))
+		   (if (zerop n)
+		       (bb:walk
+			 (async-insert-dao object)
+			 (values object t))
+		       (values object nil)))
+		 (unbound-slot ()
+			       (bb:walk
+				 (async-insert-dao object)
+				 (values object t)))))))
+
+	  (let ((tmpl (sql-template `(:delete-from ,table-name :where ,(test-fields key-fields)))))
+	    (defmethod async-delete-dao ((object ,class))
+	      (async-execute (apply tmpl (slot-values object key-fields)))))
+
+	  (let ((tmpl (sql-template `(:select * :from ,table-name :where ,(test-fields key-fields)))))
+	    (defmethod async-get-dao ((type (eql (class-name ,class))) &rest keys)
+	      (let (result)
+		(flet ((add-row (list)
+			 (setf result (or result (car list)))))
+		  (bb:walk
+		    (async-exec-query *database*  (apply tmpl keys)
+				      (cl-postgres-async::row-handler-by-reader
+				       #'add-row (dao-row-reader ,class)))
+		    result))))))
+
+	(defmethod async-insert-dao ((object ,class))
+	  (let (bound unbound)
+	    (loop :for field :in fields
+		  :do (if (slot-boundp object field)
+			  (push field bound)
+			  (push field unbound)))
+
+	    (let* ((values (mapcan (lambda (x) (list (field-sql-name x) (slot-value object x)))
+				   (remove-if (lambda (x) (member x ghost-fields)) bound) )))
+	      (bb:alet ((returned (async-query (sql-compile `(:insert-into ,table-name
+							      :set ,@values
+							      ,@(when unbound (cons :returning unbound))))
+					       :row)))
+		(when unbound
+		  (loop :for value :in returned
+			:for field :in unbound
+			:do (setf (slot-value object field) value)))
+		object))))
+
+	(let* ((defaulted-slots (remove-if-not (lambda (x) (slot-boundp x 'col-default))
+					       (dao-column-slots ,class)))
+	       (defaulted-names (mapcar 'slot-definition-name defaulted-slots))
+	       (default-values (mapcar 'column-default defaulted-slots)))
+	  (if defaulted-slots
+	      (defmethod async-fetch-defaults ((object ,class))
+		(let (names defaults)
+		  ;; Gather unbound slots and their default expressions.
+		  (loop :for slot-name :in defaulted-names
+			:for default :in default-values
+			:do (unless (slot-boundp object slot-name)
+			      (push slot-name names)
+			      (push default defaults)))
+		  ;; If there are any unbound, defaulted slots, fetch their content.
+		  (when names
+		    (bb:alet ((list (async-query (sql-compile (cons :select defaults)) :list)))
+		      (loop :for value :in list
+			    :for slot-name :in names
+			    :do (setf (slot-value object slot-name) value))))))
+	      (defmethod async-fetch-defaults ((object ,class))
+		nil)))
+	(defmethod shared-initialize :after ((object ,class) slot-names
+					     &key (fetch-defaults nil) &allow-other-keys)
+	  (declare (ignore slot-names))
+	  (when (and fetch-defaults
+		     (typep *database* 'async-database-connection))
+	    (error "Not fetching default slots asynchronously")))))))
+
+(defun async-save-dao (dao)
+  "Try to insert the content of a DAO. If this leads to a unique key
+violation, update it instead."
+  (bb:catcher
+   (bb:walk (async-insert-dao dao) t)
+   (cl-postgres-async-error:unique-violation
+    ()
+    (bb:walk (async-update-dao dao) nil))))
+
+(defun async-save-dao/transaction (dao)
+  (bb:catcher
+   (bb:walk (with-async-savepoint async-save-dao/transaction
+	      (async-insert-dao dao)) t)
+   (cl-postgres-async-error:unique-violation
+    ()
+    (bb:walk (async-update-dao dao) nil))))
+
