@@ -519,3 +519,25 @@ violation, update it instead."
     ()
     (bb:walk (async-update-dao dao) nil))))
 
+
+(defmacro do-async-query-dao (((type type-var) query) &body body)
+  "Like async-query-dao, but rather than returning a list of results,
+executes BODY once for each result, with TYPE-VAR bound to the DAO
+representing that result."
+  (let (args)
+    (when (and (consp query) (not (keywordp (first query))))
+      (setf args (cdr query) query (car query)))
+    `(async-query-dao% ,type ,(real-query query)
+		       (dao-row-reader-with-body (,type ,type-var)
+			 ,@body)
+		       ,@args)))
+
+(defmacro do-async-select-dao (((type type-var) &optional (test t) &rest ordering)
+			       &body body)
+  "Like async-select-dao, but rather than returning a list of results,
+executes BODY once for each result, with TYPE-VAR bound to the DAO
+representing that result."
+  `(async-query-dao% ,type (sql ,(generate-dao-query type test ordering))
+		     (dao-row-reader-with-body (,type ,type-var)
+		       ,@body)))
+
