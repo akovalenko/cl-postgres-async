@@ -8,7 +8,7 @@
             :components ((:file "simple-date")))))
 
 (defsystem :simple-date-postgres-async-glue
-  :depends-on (:simple-date :cl-postgres)
+  :depends-on (:simple-date :cl-postgres-async)
   :components
   ((:module :simple-date
             :components
